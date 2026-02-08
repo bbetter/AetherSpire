@@ -1,0 +1,19 @@
+{
+  "name": "aether-spire",
+  "private": true,
+  "workspaces": [
+    "client",
+    "server",
+    "shared"
+  ],
+  "scripts": {
+    "dev": "npm --workspace server run dev & npm --workspace client run dev",
+    "build": "npm --workspace shared run build && npm --workspace server run build && npm --workspace client run build",
+    "lint": "npm --workspace server run lint && npm --workspace client run lint",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "vitest": "4.0.18"
+  }
+}

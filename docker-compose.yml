@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  aether-spire:
+    image: aether-spire:latest
+    container_name: aether-spire-server
+    ports:
+      - "5173:5173"  # Client dev server
+      - "8080:8080"  # WebSocket server
+    environment:
+      - NODE_ENV=production
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data  # Optional: for persistent data
+    networks:
+      - mediastack
+      - aether-spire-network
+
+networks:
+  mediastack:
+    external: true
+    name: mediastack
+  aether-spire-network:
+    driver: bridge
+
