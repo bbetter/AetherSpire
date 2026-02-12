@@ -22,6 +22,26 @@ export interface HatchDef {
 
 export type InstrumentType = "arcane_conduit" | "gear_wrench" | "thermal_regulator";
 
+export const ISSUE_DAMAGE_CURVE: { maxAgeSec: number; dps: number }[] = [
+  { maxAgeSec: 8, dps: 0.6 },
+  { maxAgeSec: 12, dps: 0.25 },
+  { maxAgeSec: 16, dps: 0.5 },
+  { maxAgeSec: 20, dps: 0.75 },
+  { maxAgeSec: Infinity, dps: 1.0 },
+];
+
+export function damagePerSecondForAge(ageSec: number): number {
+  for (const step of ISSUE_DAMAGE_CURVE) {
+    if (ageSec <= step.maxAgeSec) return step.dps;
+  }
+  return ISSUE_DAMAGE_CURVE[ISSUE_DAMAGE_CURVE.length - 1].dps;
+}
+
+export function damagePerSecondForSpawnTime(spawnTime: number, now: number): number {
+  const ageSec = (now - spawnTime) / 1000;
+  return damagePerSecondForAge(ageSec);
+}
+
 export interface Issue {
   id: string;
   type: IssueType;
@@ -49,6 +69,12 @@ export interface GroundInstrument {
   spawnTime: number;
 }
 
+export interface Lockout {
+  id: string;
+  kind: "door" | "hatch";
+  endsAt: number;
+}
+
 // ── Game State ───────────────────────────────────────────────
 
 export interface GameState {
@@ -62,6 +88,7 @@ export interface GameState {
   teamInventory: InstrumentType[];
   groundInstruments: GroundInstrument[];
   hatches: HatchDef[];
+  lockouts: Lockout[];
   issuesFixed: number;
   gameOver: boolean;
   won: boolean;
@@ -137,16 +164,16 @@ export const HATCH_DEFINITIONS: HatchDef[] = [
   {
     id: "hatch-fore",
     layerA: "deck",
-    posA: { x: 1600, y: 780 },
+    posA: { x: 1600, y: 680 },
     layerB: "cargo",
-    posB: { x: 1600, y: 875 },
+    posB: { x: 1600, y: 820 },
   },
   {
     id: "hatch-aft",
     layerA: "deck",
-    posA: { x: 1600, y: 1580 },
+    posA: { x: 1600, y: 1720 },
     layerB: "cargo",
-    posB: { x: 1600, y: 1525 },
+    posB: { x: 1600, y: 1600 },
   },
 ];
 

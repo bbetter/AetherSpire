@@ -11,7 +11,8 @@
     "build": "npm --workspace shared run build && npm --workspace server run build && npm --workspace client run build",
     "lint": "npm --workspace server run lint && npm --workspace client run lint",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "deploy": "local-deploy"
   },
   "devDependencies": {
     "vitest": "4.0.18"

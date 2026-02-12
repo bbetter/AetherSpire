@@ -1,6 +1,10 @@
 import type { GameState, Phase, GroundInstrument, InstrumentType, LayerId } from "@aether-spire/shared";
 import { SPAWN_ZONES, HATCH_DEFINITIONS } from "@aether-spire/shared";
-import { spawnIssue, applyIssueDamage, getSpawnIntervalSec } from "./issues.js";
+import { applyIssueDamage, getSpawnIntervalSec } from "./issues.js";
+import type { IssueFactory, SpawnStrategy } from "./issuePatterns.js";
+import { DefaultIssueFactory, DEFAULT_SPAWN_STRATEGY } from "./issuePatterns.js";
+import type { LockoutStrategy } from "./lockoutPatterns.js";
+import { DEFAULT_LOCKOUT_STRATEGY } from "./lockoutPatterns.js";
 
 export interface FixProgress {
   playerId: string;
@@ -17,15 +21,28 @@ export interface MatchRuntime {
   rng: () => number;
   lastTickAt: number;
   lastIssueSpawnAt: number;
+  lastLockoutAt: number;
+  issueFactory: IssueFactory;
+  spawnStrategy: SpawnStrategy;
+  lockoutStrategy: LockoutStrategy;
   fixProgress: Map<string, FixProgress>;
 }
 
 const INSTRUMENT_TYPES: InstrumentType[] = ["arcane_conduit", "gear_wrench", "thermal_regulator"];
 const MATCH_DURATION_SEC = 420; // 7 minutes - increased from 6 minutes for better pacing
 
-export function createMatch(matchId: string): MatchRuntime {
+export interface MatchConfig {
+  issueFactory?: IssueFactory;
+  spawnStrategy?: SpawnStrategy;
+  lockoutStrategy?: LockoutStrategy;
+}
+
+export function createMatch(matchId: string, config: MatchConfig = {}): MatchRuntime {
   const rng = createRng(1234);
   const now = Date.now();
+  const issueFactory = config.issueFactory ?? new DefaultIssueFactory();
+  const spawnStrategy = config.spawnStrategy ?? DEFAULT_SPAWN_STRATEGY;
+  const lockoutStrategy = config.lockoutStrategy ?? DEFAULT_LOCKOUT_STRATEGY;
 
   const groundInstruments: GroundInstrument[] = INSTRUMENT_TYPES.map((type, i) => {
     const deckZones = SPAWN_ZONES.filter(z => z.layer === "deck");
@@ -51,6 +68,7 @@ export function createMatch(matchId: string): MatchRuntime {
     teamInventory: [],
     groundInstruments,
     hatches: HATCH_DEFINITIONS,
+    lockouts: [],
     issuesFixed: 0,
     gameOver: false,
     won: false,
@@ -65,6 +83,10 @@ export function createMatch(matchId: string): MatchRuntime {
     rng,
     lastTickAt: now,
     lastIssueSpawnAt: now,
+    lastLockoutAt: now,
+    issueFactory,
+    spawnStrategy,
+    lockoutStrategy,
     fixProgress: new Map(),
   };
 }
@@ -83,32 +105,35 @@ export function tickMatch(runtime: MatchRuntime): void {
   const { newStability } = applyIssueDamage(state.issues, state.stability, now);
   state.stability = newStability;
 
-  // 3. Check fix completions
+  // 3. Update lockouts
+  updateLockouts(runtime, now);
+
+  // 4. Check fix completions
   checkFixCompletions(runtime, now);
 
-  // 4. Maybe spawn instruments
+  // 5. Maybe spawn instruments
   maybeSpawnInstrument(runtime, now);
 
-  // 5. Update phase
+  // 6. Update phase
   state.phase = phaseForTime(state.timeRemainingSec);
 
-  // 6. Check lose
+  // 7. Check lose
   if (state.stability <= 0) {
     state.stability = 0;
     state.gameOver = true;
     state.won = false;
   }
 
-  // 7. Decrement time
+  // 8. Decrement time
   state.timeRemainingSec = Math.max(0, state.timeRemainingSec - 1);
 
-  // 8. Check win
+  // 9. Check win
   if (state.timeRemainingSec <= 0 && state.stability > 0) {
     state.gameOver = true;
     state.won = true;
   }
 
-  // 9. Update fix progress for all active fixes
+  // 10. Update fix progress for all active fixes
   updateFixProgress(runtime, now);
 
   state.nextTickAt = now + 1000;
@@ -121,12 +146,39 @@ function spawnIssues(runtime: MatchRuntime, now: number): void {
   const elapsed = now - runtime.lastIssueSpawnAt;
 
   if (elapsed >= intervalMs) {
-    // 60% deck, 40% cargo
-    const layer: LayerId = runtime.rng() < 0.6 ? "deck" : "cargo";
-    const issue = spawnIssue(runtime.rng, now, runtime.state.phase, runtime.playerCount, layer);
+    const activeIssues = runtime.state.issues.filter((i) => i.status === "active");
+    const layer: LayerId = runtime.spawnStrategy.pickLayer({
+      rng: runtime.rng,
+      activeIssues,
+      baseDeckWeight: 0.6,
+    });
+    const issue = runtime.issueFactory.createIssue(
+      runtime.rng,
+      now,
+      runtime.state.phase,
+      runtime.playerCount,
+      layer
+    );
     runtime.state.issues.push(issue);
     runtime.lastIssueSpawnAt = now;
   }
+}
+
+function updateLockouts(runtime: MatchRuntime, now: number): void {
+  const { state } = runtime;
+
+  state.lockouts = state.lockouts.filter((lockout) => lockout.endsAt > now);
+  if (state.lockouts.length > 0) return;
+
+  const next = runtime.lockoutStrategy.maybeCreateLockout({
+    rng: runtime.rng,
+    now,
+    lastLockoutAt: runtime.lastLockoutAt,
+  });
+  if (!next) return;
+
+  state.lockouts = [next];
+  runtime.lastLockoutAt = now;
 }
 
 function checkFixCompletions(runtime: MatchRuntime, now: number): void {

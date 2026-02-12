@@ -5,6 +5,7 @@ import { playFootstep, playPickup, playFixStart, playToolFixStart, playFixComple
 import { colorFromId, getAreaName, circleIntersectsRect, findNearestDoor } from "./game/utils";
 import type { Issue, GroundInstrument, LayerId } from "@aether-spire/shared";
 import { HATCH_DEFINITIONS } from "@aether-spire/shared";
+import { setupTouchControls } from "./game/touch";
 import type { GameState } from "@aether-spire/shared";
 
 (async () => {
@@ -29,6 +30,35 @@ const playerId = crypto.randomUUID();
 const keys = new Set<string>();
 const DEFAULT_ZOOM = 1.25;
 const camera = { x: player.x, y: player.y, zoom: DEFAULT_ZOOM };
+
+// ── Touch Controls ──
+const touch = setupTouchControls({
+  onInteract: () => {
+    if (!gameStarted || gameOver) return;
+    simulateInteract();
+  },
+  onCancel: () => {
+    if (fixing) cancelFix();
+    else if (contextMenu.visible) closeContextMenu();
+  },
+  onPing: () => {
+    if (!gameStarted || fixing || contextMenu.visible) return;
+    const now = performance.now();
+    if (now - lastPingSentAt < PING_COOLDOWN_MS) return;
+    lastPingSentAt = now;
+    connection.sendPingLocation("local-match", playerId, player.x, player.y, currentLayer);
+  },
+  onContextMenuSelect: (index: number) => {
+    if (!contextMenu.visible) return;
+    contextMenu.selectedIndex = index;
+    confirmContextMenu();
+  },
+});
+
+// Wire pinch-zoom
+touch.onPinchZoom = (delta: number) => {
+  camera.zoom = Math.max(0.8, Math.min(2.5, camera.zoom + delta));
+};
 let lastMoveSentAt = 0;
 let lastPickedUpToolId = "";
 let lastPickupAt = 0;
@@ -144,6 +174,7 @@ const demoState: GameState = {
   teamInventory: [],
   groundInstruments: [],
   hatches: [],
+  lockouts: [],
   issuesFixed: 0,
   gameOver: false,
   won: false,
@@ -161,6 +192,11 @@ function canMoveTo(nx: number, ny: number) {
   }
   const doors = world!.getDoors();
   for (const door of doors) {
+    const jammed = world!.isDoorJammed(door.id);
+    if (jammed) {
+      if (circleIntersectsRect(nx, ny, radius, door)) return false;
+      continue;
+    }
     if (door.open) continue;
     if (circleIntersectsRect(nx, ny, radius, door)) return false;
   }
@@ -575,14 +611,25 @@ app.ticker.add((ticker) => {
       // (server will remove the issue from state, which clears fixing via the state callback)
       world.setChannelProgress(1, "Completing...");
     }
+    // Cancel fix if joystick is moved (same as WASD cancel)
+    const joy = touch.getDirection();
+    if (joy.vx !== 0 || joy.vy !== 0) {
+      cancelFix();
+    }
   } else if (!contextMenu.visible && !gameOver) {
-    // Movement (only when not fixing, not in context menu, not game over)
+    // Movement: merge keyboard + joystick
     let vx = 0;
     let vy = 0;
     if (keys.has("KeyW")) vy -= 1;
     if (keys.has("KeyS")) vy += 1;
     if (keys.has("KeyA")) vx -= 1;
     if (keys.has("KeyD")) vx += 1;
+    // Joystick input (overrides keyboard if active)
+    const joy = touch.getDirection();
+    if (joy.vx !== 0 || joy.vy !== 0) {
+      vx = joy.vx;
+      vy = joy.vy;
+    }
     if (vx !== 0 || vy !== 0) {
       // Set direction based on strongest axis
       if (Math.abs(vy) >= Math.abs(vx)) {
@@ -689,25 +736,32 @@ app.ticker.add((ticker) => {
     const nearIssue = findNearestIssue();
     const nearDoor = findNearestDoor(world.getDoors(), player.x, player.y);
 
+    const prefix = touch.isMobile ? "" : "[E] ";
     if (nearIssue) {
       const isJoining = nearIssue.status === "in_progress";
       const action = isJoining ? "Help fix" : "Fix issue";
-      world.setInteractionText(`[E] ${action}: ${nearIssue.type.replace(/_/g, " ")}`);
+      world.setInteractionText(`${prefix}${action}: ${nearIssue.type.replace(/_/g, " ")}`);
     } else if (nearDoor && nearDoor.dist <= 60) {
-      world.setInteractionText(`[E] ${nearDoor.open ? "Close" : "Open"} door`);
+      const jammed = world.isDoorJammed(nearDoor.id);
+      world.setInteractionText(jammed ? "Door jammed" : `${prefix}${nearDoor.open ? "Close" : "Open"} door`);
     } else {
       const nearHatch = findNearestHatch();
       if (nearHatch && nearHatch.dist <= 60) {
-        const targetLayer = currentLayer === "deck" ? "Cargo Hold" : "Main Deck";
-        world.setInteractionText(`[E] Go to ${targetLayer}`);
+        const jammed = world.isHatchJammed(nearHatch.id);
+        if (jammed) {
+          world.setInteractionText("Hatch jammed");
+        } else {
+          const targetLayer = currentLayer === "deck" ? "Cargo Hold" : "Main Deck";
+          world.setInteractionText(`${prefix}Go to ${targetLayer}`);
+        }
       } else {
         world.setInteractionText("");
       }
     }
   } else if (fixing) {
-    world.setInteractionText("[ESC] Cancel fix | [WASD] Cancel & move");
+    world.setInteractionText(touch.isMobile ? "" : "[ESC] Cancel fix | [WASD] Cancel & move");
   } else if (contextMenu.visible) {
-    world.setInteractionText("[W/S] Navigate | [E] Confirm | [ESC] Cancel");
+    world.setInteractionText(touch.isMobile ? "" : "[W/S] Navigate | [E] Confirm | [ESC] Cancel");
   }
 
   if (joined && !fixing) {
@@ -717,7 +771,98 @@ app.ticker.add((ticker) => {
       connection.sendMove("local-match", playerId, player.x, player.y);
     }
   }
+
+  // Update touch controls
+  if (touch.isMobile) {
+    const nearIssue = !fixing && !contextMenu.visible && !gameOver ? findNearestIssue() : null;
+    const nearDoor = !fixing && !contextMenu.visible && !gameOver && world
+      ? findNearestDoor(world.getDoors(), player.x, player.y)
+      : null;
+    const nearHatch = !fixing && !contextMenu.visible && !gameOver && world
+      ? findNearestHatch()
+      : null;
+    const doorInteractable = !!(nearDoor && nearDoor.dist <= 60 && world && !world.isDoorJammed(nearDoor.id));
+    const hatchInteractable = !!(nearHatch && nearHatch.dist <= 60 && world && !world.isHatchJammed(nearHatch.id));
+    const hasInteractable = !!(nearIssue || doorInteractable || hatchInteractable);
+
+    let interactLabel = "";
+    if (nearIssue) {
+      const isJoining = nearIssue.status === "in_progress";
+      interactLabel = isJoining ? "Help" : "Fix";
+    } else if (nearDoor && nearDoor.dist <= 60) {
+      interactLabel = world && world.isDoorJammed(nearDoor.id) ? "Jammed" : nearDoor.open ? "Close" : "Open";
+    } else if (nearHatch && nearHatch.dist <= 60) {
+      interactLabel = world && world.isHatchJammed(nearHatch.id) ? "Jammed" : currentLayer === "deck" ? "Cargo" : "Deck";
+    }
+
+    const ctxOptions = contextMenu.issue && latestState ? [
+      { label: `Manual (${contextMenu.issue.baseFixTime}s)`, disabled: false },
+      {
+        label: `Tool (${contextMenu.issue.fixTimeWithTool}s)`,
+        disabled: !latestState.teamInventory.includes(contextMenu.issue.requiredTool),
+      },
+      { label: "Cancel", disabled: false },
+    ] : [];
+
+    touch.updateState({
+      hasNearInteractable: hasInteractable,
+      interactLabel,
+      isFixing: !!fixing,
+      isContextMenuOpen: contextMenu.visible,
+      contextMenuOptions: ctxOptions,
+      gameOver,
+      gameStarted,
+    });
+  }
 });
+
+function simulateInteract() {
+  if (!gameStarted || fixing) return;
+
+  if (contextMenu.visible) {
+    confirmContextMenu();
+    return;
+  }
+
+  const nearIssue = findNearestIssue();
+  if (nearIssue) {
+    if (nearIssue.status === "in_progress") {
+      connection.sendStartFix("local-match", playerId, nearIssue.id, "default");
+      const now = Date.now();
+      const elapsed = now - (nearIssue.fixStartedAt || now);
+      const remaining = Math.max(0, (nearIssue.fixDurationMs || 0) - elapsed);
+      const boostedRemaining = remaining * 0.6;
+      fixing = {
+        active: true,
+        issueId: nearIssue.id,
+        startedAt: performance.now(),
+        durationMs: boostedRemaining,
+        label: "Helping fix...",
+      };
+      playFixStart();
+    } else {
+      openContextMenu(nearIssue);
+    }
+    return;
+  }
+
+  if (world) {
+    const doors = world.getDoors();
+    const nearDoor = findNearestDoor(doors, player.x, player.y);
+    if (nearDoor && nearDoor.dist <= 60) {
+      if (world.isDoorJammed(nearDoor.id)) return;
+      connection.sendDoor("local-match", nearDoor.id, !nearDoor.open);
+      return;
+    }
+
+    const nearHatch = findNearestHatch();
+    if (nearHatch && nearHatch.dist <= 60 && performance.now() >= hatchCooldownUntil) {
+      if (world.isHatchJammed(nearHatch.id)) return;
+      connection.sendUseHatch("local-match", playerId, nearHatch.id);
+      return;
+    }
+  }
+}
 
 // ── Input ──
 
@@ -790,48 +935,7 @@ window.addEventListener("keydown", (event) => {
 
   // E key: interact
   if (event.code === "KeyE" && !fixing) {
-    if (!gameStarted) return;
-
-    // Priority 1: Nearby issue
-    const nearIssue = findNearestIssue();
-    if (nearIssue) {
-      if (nearIssue.status === "in_progress") {
-        // Auto-join: skip context menu, help directly
-        connection.sendStartFix("local-match", playerId, nearIssue.id, "default");
-        const now = Date.now();
-        const elapsed = now - (nearIssue.fixStartedAt || now);
-        const remaining = Math.max(0, (nearIssue.fixDurationMs || 0) - elapsed);
-        const boostedRemaining = remaining * 0.6;
-        fixing = {
-          active: true,
-          issueId: nearIssue.id,
-          startedAt: performance.now(),
-          durationMs: boostedRemaining,
-          label: "Helping fix...",
-        };
-        playFixStart();
-      } else {
-        openContextMenu(nearIssue);
-      }
-      return;
-    }
-
-    // Priority 2: Open/close door
-    if (world) {
-      const doors = world.getDoors();
-      const nearDoor = findNearestDoor(doors, player.x, player.y);
-      if (nearDoor && nearDoor.dist <= 60) {
-        connection.sendDoor("local-match", nearDoor.id, !nearDoor.open);
-        return;
-      }
-
-      // Priority 3: Use hatch (layer transition)
-      const nearHatch = findNearestHatch();
-      if (nearHatch && nearHatch.dist <= 60 && performance.now() >= hatchCooldownUntil) {
-        connection.sendUseHatch("local-match", playerId, nearHatch.id);
-        return;
-      }
-    }
+    simulateInteract();
     return;
   }
 
@@ -903,10 +1007,14 @@ function createStartScreen(callbacks: LobbyCallbacks) {
   overlay.style.zIndex = "30";
 
   const panel = document.createElement("div");
-  panel.style.width = "380px";
+  panel.style.width = "90vw";
   panel.style.padding = "18px";
   panel.style.background = "rgba(12, 16, 22, 0.98)";
   panel.style.border = "1px solid #2a3b47";
+  panel.style.maxWidth = "380px";
+  panel.style.boxSizing = "border-box";
+  panel.style.maxHeight = "90vh";
+  panel.style.overflowY = "auto";
   panel.style.fontFamily = '"Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
   panel.style.color = "#e6e6e6";
   overlay.appendChild(panel);
@@ -939,7 +1047,8 @@ function createStartScreen(callbacks: LobbyCallbacks) {
   nameInput.placeholder = "Enter your name";
   nameInput.style.width = "100%";
   nameInput.style.marginBottom = "14px";
-  nameInput.style.padding = "8px";
+  nameInput.style.padding = "12px";
+  nameInput.style.fontSize = "16px";
   nameInput.style.background = "#0f141b";
   nameInput.style.border = "1px solid #2a3b47";
   nameInput.style.color = "#e6e6e6";
@@ -986,6 +1095,7 @@ function createStartScreen(callbacks: LobbyCallbacks) {
   roomCodeInput.placeholder = "Room code";
   roomCodeInput.style.flex = "1";
   roomCodeInput.style.padding = "8px";
+  roomCodeInput.style.fontSize = "16px";
   roomCodeInput.style.background = "#0f141b";
   roomCodeInput.style.border = "1px solid #2a3b47";
   roomCodeInput.style.color = "#e6e6e6";

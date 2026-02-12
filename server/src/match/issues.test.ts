@@ -89,54 +89,48 @@ describe("calculateDamagePerSecond", () => {
     expect(calculateDamagePerSecond(issue, 30000)).toBe(0);
   });
 
-  it("returns 0.4 for age 0-10s (freshly spawned)", () => {
+  it("returns 0.6 for age 0-8s (freshly spawned)", () => {
     const issue = makeIssue({ spawnTime: 1000 });
-    expect(calculateDamagePerSecond(issue, 1000)).toBe(0.4); // age = 0s
+    expect(calculateDamagePerSecond(issue, 1000)).toBe(0.6); // age = 0s
   });
 
-  it("returns 0.4 for age exactly at 5s", () => {
+  it("returns 0.6 for age exactly at 5s", () => {
     const issue = makeIssue({ spawnTime: 0 });
-    expect(calculateDamagePerSecond(issue, 5000)).toBe(0.4);
+    expect(calculateDamagePerSecond(issue, 5000)).toBe(0.6);
   });
 
-  it("returns 0.4 at exactly 10s boundary", () => {
+  it("returns 0.6 at exactly 8s boundary", () => {
     const issue = makeIssue({ spawnTime: 0 });
-    expect(calculateDamagePerSecond(issue, 10000)).toBe(0.4);
+    expect(calculateDamagePerSecond(issue, 8000)).toBe(0.6);
   });
 
-  it("returns 0.16 just past 10s", () => {
+  it("returns 0.25 just past 8s", () => {
     const issue = makeIssue({ spawnTime: 0 });
-    expect(calculateDamagePerSecond(issue, 10001)).toBe(0.16);
+    expect(calculateDamagePerSecond(issue, 8001)).toBe(0.25);
   });
 
-  it("returns 0.16 for age 10-15s", () => {
+  it("returns 0.25 for age 8-12s", () => {
     const issue = makeIssue({ spawnTime: 0 });
-    expect(calculateDamagePerSecond(issue, 12000)).toBe(0.16);
-    expect(calculateDamagePerSecond(issue, 15000)).toBe(0.16);
+    expect(calculateDamagePerSecond(issue, 10000)).toBe(0.25);
+    expect(calculateDamagePerSecond(issue, 12000)).toBe(0.25);
   });
 
-  it("returns 0.32 for age 15-20s", () => {
+  it("returns 0.5 for age 12-16s", () => {
     const issue = makeIssue({ spawnTime: 0 });
-    expect(calculateDamagePerSecond(issue, 15001)).toBe(0.32);
-    expect(calculateDamagePerSecond(issue, 20000)).toBe(0.32);
+    expect(calculateDamagePerSecond(issue, 12001)).toBe(0.5);
+    expect(calculateDamagePerSecond(issue, 16000)).toBe(0.5);
   });
 
-  it("returns 0.48 for age 20-25s", () => {
+  it("returns 0.75 for age 16-20s", () => {
     const issue = makeIssue({ spawnTime: 0 });
-    expect(calculateDamagePerSecond(issue, 20001)).toBe(0.48);
-    expect(calculateDamagePerSecond(issue, 25000)).toBe(0.48);
+    expect(calculateDamagePerSecond(issue, 16001)).toBe(0.75);
+    expect(calculateDamagePerSecond(issue, 20000)).toBe(0.75);
   });
 
-  it("returns 0.64 for age 25-30s", () => {
+  it("returns 1.0 for age beyond 20s", () => {
     const issue = makeIssue({ spawnTime: 0 });
-    expect(calculateDamagePerSecond(issue, 25001)).toBe(0.64);
-    expect(calculateDamagePerSecond(issue, 30000)).toBe(0.64);
-  });
-
-  it("returns 0.8 for age beyond 30s", () => {
-    const issue = makeIssue({ spawnTime: 0 });
-    expect(calculateDamagePerSecond(issue, 30001)).toBe(0.8);
-    expect(calculateDamagePerSecond(issue, 60000)).toBe(0.8);
+    expect(calculateDamagePerSecond(issue, 20001)).toBe(1.0);
+    expect(calculateDamagePerSecond(issue, 60000)).toBe(1.0);
   });
 });
 
@@ -150,19 +144,19 @@ describe("applyIssueDamage", () => {
   });
 
   it("subtracts damage from a single active issue", () => {
-    const issue = makeIssue({ spawnTime: 0 }); // age 5s at now=5000 => 0.4 dps
+    const issue = makeIssue({ spawnTime: 0 }); // age 5s at now=5000 => 0.6 dps
     const result = applyIssueDamage([issue], 100, 5000);
-    expect(result.totalDamage).toBe(0.4);
-    expect(result.newStability).toBe(99.6);
+    expect(result.totalDamage).toBe(0.6);
+    expect(result.newStability).toBe(99.4);
   });
 
   it("sums damage from multiple active issues", () => {
-    const issue1 = makeIssue({ id: "a", spawnTime: 0 });        // age 5s => 0.4
-    const issue2 = makeIssue({ id: "b", spawnTime: 0 });        // age 5s => 0.4
-    const issue3 = makeIssue({ id: "c", spawnTime: -20000 });   // age 25s => 0.48
+    const issue1 = makeIssue({ id: "a", spawnTime: 0 });        // age 5s => 0.6
+    const issue2 = makeIssue({ id: "b", spawnTime: 0 });        // age 5s => 0.6
+    const issue3 = makeIssue({ id: "c", spawnTime: -20000 });   // age 25s => 1.0
     const result = applyIssueDamage([issue1, issue2, issue3], 50, 5000);
-    expect(result.totalDamage).toBeCloseTo(0.4 + 0.4 + 0.48);
-    expect(result.newStability).toBeCloseTo(50 - (0.4 + 0.4 + 0.48));
+    expect(result.totalDamage).toBeCloseTo(0.6 + 0.6 + 1.0);
+    expect(result.newStability).toBeCloseTo(50 - (0.6 + 0.6 + 1.0));
   });
 
   it("does not count non-active issues", () => {
@@ -170,18 +164,18 @@ describe("applyIssueDamage", () => {
     const fixed = makeIssue({ id: "b", spawnTime: 0, status: "fixed" });
     const inProgress = makeIssue({ id: "c", spawnTime: 0, status: "in_progress" });
     const result = applyIssueDamage([active, fixed, inProgress], 80, 5000);
-    expect(result.totalDamage).toBe(0.4);
-    expect(result.newStability).toBe(79.6);
+    expect(result.totalDamage).toBe(0.6);
+    expect(result.newStability).toBe(79.4);
   });
 
   it("clamps stability to 0 (never goes negative)", () => {
     const issues = Array.from({ length: 20 }, (_, i) =>
-      makeIssue({ id: `issue_${i}`, spawnTime: -50000 }), // age 55s => 0.8 each
+      makeIssue({ id: `issue_${i}`, spawnTime: -50000 }), // age 55s => 1.0 each
     );
-    // 20 * 0.8 = 16 damage; starting at 5 => would be -11
+    // 20 * 1.0 = 20 damage; starting at 5 => would be -15
     const result = applyIssueDamage(issues, 5, 5000);
     expect(result.newStability).toBe(0);
-    expect(result.totalDamage).toBeCloseTo(16);
+    expect(result.totalDamage).toBeCloseTo(20);
   });
 });
 

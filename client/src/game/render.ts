@@ -1,6 +1,11 @@
 import { Container, Graphics, Text, TilingSprite, Assets, Texture, AnimatedSprite, Rectangle, Sprite } from "pixi.js";
 import type { Application } from "pixi.js";
-import type { GameState, Issue, IssueType, InstrumentType, GroundInstrument, LayerId } from "@aether-spire/shared";
+import type { GameState, Issue, IssueType, InstrumentType, GroundInstrument, LayerId, Lockout } from "@aether-spire/shared";
+import { HATCH_DEFINITIONS } from "@aether-spire/shared";
+import { DEFAULT_DRAIN_STRATEGY } from "./issuePatterns";
+import { DEFAULT_ISSUE_VISUALS } from "./issueVisuals";
+import { DEFAULT_THEME } from "./theme";
+import { buildAirshipLayout } from "./layouts/airshipLayout";
 
 const instrumentColors: Record<InstrumentType, number> = {
   arcane_conduit: 0x6aa5ff,
@@ -14,56 +19,14 @@ const instrumentLabels: Record<InstrumentType, string> = {
   thermal_regulator: "Thermal Regulator",
 };
 
-const issueColors: Record<string, number> = {
-  pressure_surge: 0xff6b6b,
-  coolant_leak: 0x6aa5ff,
-  mechanical_drift: 0xffb24d,
-  capacitor_overload: 0xb197fc,
-  friction_fire: 0xff9944,
-  control_corruption: 0x63e6be,
-};
+const issueColors = DEFAULT_ISSUE_VISUALS.colors;
+const issueLabels = DEFAULT_ISSUE_VISUALS.labels;
 
-const issueLabels: Record<string, string> = {
-  pressure_surge: "Pressure Surge",
-  coolant_leak: "Coolant Leak",
-  mechanical_drift: "Mech. Drift",
-  capacitor_overload: "Cap. Overload",
-  friction_fire: "Friction Fire",
-  control_corruption: "Ctrl Corrupt",
-};
-
-// ── Steampunk UI Palette ──
-const UI_FONT = '"Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
-const UI_FONT_MONO = '"SF Mono", "Cascadia Mono", "Consolas", monospace';
-
-const SP = {
-  brass: 0xb8860b,
-  copper: 0xcd7f32,
-  amber: 0xdaa520,
-  gold: 0xffd700,
-  darkBg: 0x120e08,
-  panelBg: 0x1a1208,
-  rivet: 0xd4a844,
-  mutedText: 0xc4b89a,
-  success: 0x6aad5a,
-  danger: 0xcc4433,
-};
-
-function drawBrassPanel(gfx: Graphics, x: number, y: number, w: number, h: number, rivets = true) {
-  gfx.roundRect(x, y, w, h, 3);
-  gfx.fill({ color: SP.darkBg, alpha: 0.92 });
-  gfx.roundRect(x, y, w, h, 3);
-  gfx.stroke({ color: SP.brass, width: 2 });
-  if (rivets) {
-    const r = 2.5;
-    for (const [rx, ry] of [[x + 6, y + 6], [x + w - 6, y + 6], [x + 6, y + h - 6], [x + w - 6, y + h - 6]]) {
-      gfx.circle(rx, ry, r);
-      gfx.fill({ color: SP.rivet });
-      gfx.circle(rx, ry, r);
-      gfx.stroke({ color: SP.brass, width: 0.5, alpha: 0.6 });
-    }
-  }
-}
+const theme = DEFAULT_THEME;
+const UI_FONT = theme.fonts.ui;
+const UI_FONT_MONO = theme.fonts.mono;
+const SP = theme.colors;
+const drawBrassPanel = theme.drawPanel;
 
 // ── Issue Particle System ──
 
@@ -72,21 +35,7 @@ function lerp(a: number, b: number, t: number) { return a + (b - a) * t; }
 type ParticleShape = "circle" | "rect" | "line" | "diamond";
 type DirectionPattern = "upward" | "downward" | "radial_out" | "random";
 
-interface IssueParticleConfig {
-  colors: number[];
-  shape: ParticleShape;
-  emitRateBase: number;
-  emitRateMax: number;
-  lifetimeRange: [number, number];
-  speedRange: [number, number];
-  sizeRange: [number, number];
-  spawnRadiusBase: number;
-  spawnRadiusMax: number;
-  directionPattern: DirectionPattern;
-  alphaRange: [number, number];
-  gravity: number;
-  fadePattern: "linear" | "ease_out" | "flicker";
-}
+type IssueParticleConfig = import("./issueVisuals").IssueParticleConfig;
 
 interface IssueParticle {
   x: number; y: number;
@@ -118,101 +67,15 @@ interface IssueEmitter {
   despawnStartedAt: number;
 }
 
-const ISSUE_PARTICLE_CONFIGS: Record<IssueType, IssueParticleConfig> = {
-  pressure_surge: {
-    colors: [0xffffff, 0xe8e8e8, 0xdddddd],
-    shape: "circle",
-    emitRateBase: 14, emitRateMax: 40,
-    lifetimeRange: [0.6, 1.4],
-    speedRange: [30, 70],
-    sizeRange: [3, 7],
-    spawnRadiusBase: 12, spawnRadiusMax: 40,
-    directionPattern: "upward",
-    alphaRange: [0.85, 0],
-    gravity: -12,
-    fadePattern: "ease_out",
-  },
-  coolant_leak: {
-    colors: [0x6aa5ff, 0x4499ee, 0x99ccff],
-    shape: "circle",
-    emitRateBase: 10, emitRateMax: 30,
-    lifetimeRange: [0.8, 1.6],
-    speedRange: [12, 35],
-    sizeRange: [2.5, 6],
-    spawnRadiusBase: 10, spawnRadiusMax: 35,
-    directionPattern: "downward",
-    alphaRange: [0.9, 0.15],
-    gravity: 25,
-    fadePattern: "linear",
-  },
-  mechanical_drift: {
-    colors: [0xffb24d, 0xff8800, 0xffdd88],
-    shape: "diamond",
-    emitRateBase: 16, emitRateMax: 45,
-    lifetimeRange: [0.3, 0.8],
-    speedRange: [50, 120],
-    sizeRange: [2, 5],
-    spawnRadiusBase: 8, spawnRadiusMax: 30,
-    directionPattern: "radial_out",
-    alphaRange: [1.0, 0],
-    gravity: 15,
-    fadePattern: "linear",
-  },
-  capacitor_overload: {
-    colors: [0xb197fc, 0xd4c0ff, 0x9966ee],
-    shape: "line",
-    emitRateBase: 8, emitRateMax: 22,
-    lifetimeRange: [0.1, 0.35],
-    speedRange: [0, 8],
-    sizeRange: [12, 28],
-    spawnRadiusBase: 14, spawnRadiusMax: 45,
-    directionPattern: "random",
-    alphaRange: [1.0, 0],
-    gravity: 0,
-    fadePattern: "flicker",
-  },
-  friction_fire: {
-    colors: [0xff9944, 0xff4422, 0xffcc44, 0x555555],
-    shape: "circle",
-    emitRateBase: 14, emitRateMax: 40,
-    lifetimeRange: [0.6, 1.4],
-    speedRange: [18, 50],
-    sizeRange: [2.5, 7],
-    spawnRadiusBase: 10, spawnRadiusMax: 35,
-    directionPattern: "upward",
-    alphaRange: [0.9, 0],
-    gravity: -18,
-    fadePattern: "ease_out",
-  },
-  control_corruption: {
-    colors: [0x63e6be, 0x44dd99, 0xaaffee],
-    shape: "rect",
-    emitRateBase: 10, emitRateMax: 30,
-    lifetimeRange: [0.15, 0.6],
-    speedRange: [25, 65],
-    sizeRange: [2, 6],
-    spawnRadiusBase: 12, spawnRadiusMax: 38,
-    directionPattern: "random",
-    alphaRange: [1.0, 0],
-    gravity: 0,
-    fadePattern: "flicker",
-  },
-};
+const ISSUE_PARTICLE_CONFIGS: Record<IssueType, IssueParticleConfig> = DEFAULT_ISSUE_VISUALS.particleConfigs;
 
 const MAX_PARTICLES_PER_EMITTER = 80;
 
 /** Client-side replica of server's calculateDamagePerSecond */
-function calculateDrainRate(spawnTime: number, now: number): number {
-  const ageSec = (now - spawnTime) / 1000;
-  if (ageSec <= 10) return 0.4;
-  if (ageSec <= 15) return 0.16;
-  if (ageSec <= 20) return 0.32;
-  if (ageSec <= 25) return 0.48;
-  if (ageSec <= 30) return 0.64;
-  return 0.8;
-}
+const drainRateStrategy = DEFAULT_DRAIN_STRATEGY;
 
 export function createWorld(app: Application) {
+  const isMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
   const container = new Container();
   const worldLayer = new Container();
   const uiLayer = new Container();
@@ -221,9 +84,11 @@ export function createWorld(app: Application) {
 
   const worldWidth = 3200;
   const worldHeight = 2400;
-  const walls: { x: number; y: number; w: number; h: number }[] = [];
-  const floors: { x: number; y: number; w: number; h: number; color: number }[] = [];
-  const doors: { id: string; x: number; y: number; w: number; h: number; open: boolean }[] = [];
+  let walls: { x: number; y: number; w: number; h: number }[] = [];
+  let floors: { x: number; y: number; w: number; h: number; color: number }[] = [];
+  let doors: { id: string; x: number; y: number; w: number; h: number; open: boolean }[] = [];
+  let doorLockouts = new Set<string>();
+  let hatchLockouts = new Set<string>();
   let currentLayer: LayerId = "deck";
   const coreX = worldWidth / 2;
   const coreY = worldHeight / 2;
@@ -237,21 +102,61 @@ export function createWorld(app: Application) {
   const sternY = shipCenterY + shipLength / 2; // bottom
 
   const wallThickness = 12;
-  const corridorWidth = 90;
 
-  function addHorizontalCorridor(x1: number, x2: number, y: number, width: number) {
-    const left = Math.min(x1, x2);
-    const right = Math.max(x1, x2);
-    const half = width / 2;
-    floors.push({ x: left, y: y - half, w: right - left, h: width, color: 0x101820 });
-  }
+  const layout = buildAirshipLayout({
+    shipCenterX,
+    shipCenterY,
+    shipWidthMax,
+    shipLength,
+    wallThickness,
+  });
 
-  function addVerticalCorridor(x: number, y1: number, y2: number, width: number) {
-    const top = Math.min(y1, y2);
-    const bottom = Math.max(y1, y2);
-    const half = width / 2;
-    floors.push({ x: x - half, y: top, w: width, h: bottom - top, color: 0x101820 });
-  }
+  floors = layout.deck.floors;
+  walls = layout.deck.walls;
+  doors = layout.deck.doors;
+  const bridge = layout.deck.rooms.bridge;
+  const hub = layout.deck.rooms.hub;
+  const portCabin = layout.deck.rooms.portCabin;
+  const starboardCabin = layout.deck.rooms.starboardCabin;
+  const engine = layout.deck.rooms.engine;
+  const spawnPoint = layout.deck.spawnPoint;
+
+  const bridgeX = bridge.x;
+  const bridgeY = bridge.y;
+  const bridgeW = bridge.w;
+  const bridgeH = bridge.h;
+  const hubX = hub.x;
+  const hubY = hub.y;
+  const hubW = hub.w;
+  const hubH = hub.h;
+  const cabinW = portCabin.w;
+  const cabinH = portCabin.h;
+  const portCabinX = portCabin.x;
+  const portCabinY = portCabin.y;
+  const starboardCabinX = starboardCabin.x;
+  const starboardCabinY = starboardCabin.y;
+  const engineX = engine.x;
+  const engineY = engine.y;
+  const engineW = engine.w;
+  const engineH = engine.h;
+
+  const cargoFloors = layout.cargo.floors;
+  const cargoWalls = layout.cargo.walls;
+  const cargoDoors = layout.cargo.doors;
+  const cargoRooms = layout.cargo.rooms;
+  const cargoSpawnPoint = layout.cargo.spawnPoint;
+  const cargoHullPoints = layout.cargo.hullPoints;
+  const cargoHullCollisionPoints = layout.cargo.collisionHullPoints;
+  const cargoCenterX = shipCenterX;
+  const cargoCenterY = shipCenterY;
+  const cargoX = layout.cargo.cargoX;
+  const cargoTopY = layout.cargo.cargoTopY;
+  const cargoW = layout.cargo.cargoW;
+  const foreStorageH = cargoRooms.foreStorage.h;
+  const corridorY = cargoRooms.corridor.y;
+  const corridorH = cargoRooms.corridor.h;
+  const aftStorageY = cargoRooms.aftStorage.y;
+  const aftStorageH = cargoRooms.aftStorage.h;
 
   // ── Sky Container (groups all sky/atmosphere layers, hidden in cargo) ──
   const skyContainer = new Container();
@@ -428,7 +333,7 @@ export function createWorld(app: Application) {
       const alpha = star.brightness * twinkle;
 
       starsLayer.circle(star.x, star.y, star.size);
-      starsLayer.fill({ color: 0xffffff, alpha });
+      starsLayer.fill({ color: SP.textBright, alpha });
     }
 
     // ── Update and draw clouds ──
@@ -568,115 +473,7 @@ export function createWorld(app: Application) {
 
   let floorTexture: Texture | null = null;
 
-  // ── Ship Deck Layout (BIGGER rooms) ──
-
-  // Bridge (Bow) - pointed area at front
-  const bridgeW = 340;
-  const bridgeH = 240;
-  const bridgeX = shipCenterX - bridgeW / 2;
-  const bridgeY = bowY + 160;
-  floors.push({ x: bridgeX, y: bridgeY, w: bridgeW, h: bridgeH, color: 0x121a22 });
-  // Bridge walls
-  walls.push({ x: bridgeX, y: bridgeY, w: wallThickness, h: bridgeH }); // left
-  walls.push({ x: bridgeX + bridgeW - wallThickness, y: bridgeY, w: wallThickness, h: bridgeH }); // right
-  walls.push({ x: bridgeX, y: bridgeY, w: bridgeW, h: wallThickness }); // top
-  // Bridge door (bottom, toward main deck)
-  const bridgeDoorW = 70;
-  const bridgeDoorX = shipCenterX - bridgeDoorW / 2;
-  const bridgeDoorY = bridgeY + bridgeH - wallThickness;
-  walls.push({ x: bridgeX, y: bridgeDoorY, w: bridgeDoorX - bridgeX, h: wallThickness });
-  walls.push({ x: bridgeDoorX + bridgeDoorW, y: bridgeDoorY, w: bridgeX + bridgeW - (bridgeDoorX + bridgeDoorW), h: wallThickness });
-  doors.push({ id: "door-bridge", x: bridgeDoorX, y: bridgeDoorY, w: bridgeDoorW, h: wallThickness, open: false });
-
-  // Central Hub (around the core/mast)
-  const hubW = 420;
-  const hubH = 340;
-  const hubX = shipCenterX - hubW / 2;
-  const hubY = shipCenterY - hubH / 2;
-  floors.push({ x: hubX, y: hubY, w: hubW, h: hubH, color: 0x111922 });
-
-  // Corridor from bridge to hub
-  addVerticalCorridor(shipCenterX, bridgeY + bridgeH, hubY, corridorWidth);
-
-  // Port Cabin (left side room)
-  const cabinW = 300;
-  const cabinH = 260;
-  const portCabinX = shipCenterX - shipWidthMax / 2 + 80;
-  const portCabinY = shipCenterY - cabinH / 2;
-  floors.push({ x: portCabinX, y: portCabinY, w: cabinW, h: cabinH, color: 0x121a22 });
-  // Port cabin walls
-  walls.push({ x: portCabinX, y: portCabinY, w: cabinW, h: wallThickness }); // top
-  walls.push({ x: portCabinX, y: portCabinY + cabinH - wallThickness, w: cabinW, h: wallThickness }); // bottom
-  walls.push({ x: portCabinX, y: portCabinY, w: wallThickness, h: cabinH }); // left (outer hull)
-  // Port cabin door (right side, toward hub)
-  const portDoorH = 64;
-  const portDoorY = portCabinY + cabinH / 2 - portDoorH / 2;
-  const portDoorX = portCabinX + cabinW - wallThickness;
-  walls.push({ x: portDoorX, y: portCabinY, w: wallThickness, h: portDoorY - portCabinY });
-  walls.push({ x: portDoorX, y: portDoorY + portDoorH, w: wallThickness, h: portCabinY + cabinH - (portDoorY + portDoorH) });
-  doors.push({ id: "door-port", x: portDoorX, y: portDoorY, w: wallThickness, h: portDoorH, open: false });
-
-  // Corridor from port cabin to hub
-  addHorizontalCorridor(portCabinX + cabinW, hubX, shipCenterY, corridorWidth);
-
-  // Starboard Cabin (right side room)
-  const starboardCabinX = shipCenterX + shipWidthMax / 2 - 80 - cabinW;
-  const starboardCabinY = shipCenterY - cabinH / 2;
-  floors.push({ x: starboardCabinX, y: starboardCabinY, w: cabinW, h: cabinH, color: 0x121a22 });
-  // Starboard cabin walls
-  walls.push({ x: starboardCabinX, y: starboardCabinY, w: cabinW, h: wallThickness }); // top
-  walls.push({ x: starboardCabinX, y: starboardCabinY + cabinH - wallThickness, w: cabinW, h: wallThickness }); // bottom
-  walls.push({ x: starboardCabinX + cabinW - wallThickness, y: starboardCabinY, w: wallThickness, h: cabinH }); // right (outer hull)
-  // Starboard cabin door (left side, toward hub)
-  const starboardDoorY = starboardCabinY + cabinH / 2 - portDoorH / 2;
-  walls.push({ x: starboardCabinX, y: starboardCabinY, w: wallThickness, h: starboardDoorY - starboardCabinY });
-  walls.push({ x: starboardCabinX, y: starboardDoorY + portDoorH, w: wallThickness, h: starboardCabinY + cabinH - (starboardDoorY + portDoorH) });
-  doors.push({ id: "door-starboard", x: starboardCabinX, y: starboardDoorY, w: wallThickness, h: portDoorH, open: false });
-
-  // Corridor from starboard cabin to hub
-  addHorizontalCorridor(hubX + hubW, starboardCabinX, shipCenterY, corridorWidth);
-
-  // Engine Room / Stern (spawn area at back)
-  const engineW = 400;
-  const engineH = 240;
-  const engineX = shipCenterX - engineW / 2;
-  const engineY = sternY - engineH - 100;
-  floors.push({ x: engineX, y: engineY, w: engineW, h: engineH, color: 0x121a22 });
-  // Engine room walls
-  walls.push({ x: engineX, y: engineY + engineH - wallThickness, w: engineW, h: wallThickness }); // bottom
-  walls.push({ x: engineX, y: engineY, w: wallThickness, h: engineH }); // left
-  walls.push({ x: engineX + engineW - wallThickness, y: engineY, w: wallThickness, h: engineH }); // right
-  // Engine room door (top, toward main deck)
-  const engineDoorW = 70;
-  const engineDoorX = shipCenterX - engineDoorW / 2;
-  walls.push({ x: engineX, y: engineY, w: engineDoorX - engineX, h: wallThickness });
-  walls.push({ x: engineDoorX + engineDoorW, y: engineY, w: engineX + engineW - (engineDoorX + engineDoorW), h: wallThickness });
-  doors.push({ id: "door-engine", x: engineDoorX, y: engineY, w: engineDoorW, h: wallThickness, open: true });
-
-  // Corridor from hub to engine room
-  addVerticalCorridor(shipCenterX, hubY + hubH, engineY, corridorWidth);
-
-  // Main deck area (open space around hub)
-  const deckPadding = 50;
-  // Forward deck (between bridge and hub)
-  floors.push({
-    x: shipCenterX - 240,
-    y: bridgeY + bridgeH + deckPadding,
-    w: 480,
-    h: hubY - (bridgeY + bridgeH) - deckPadding * 2,
-    color: 0x151d28,
-  });
-  // Aft deck (between hub and engine)
-  floors.push({
-    x: shipCenterX - 240,
-    y: hubY + hubH + deckPadding,
-    w: 480,
-    h: engineY - (hubY + hubH) - deckPadding * 2,
-    color: 0x151d28,
-  });
-
-  // Spawn point (in engine room / stern)
-  const spawnPoint = { x: engineX + engineW / 2, y: engineY + engineH / 2 };
+  // ── Ship Deck Layout (from buildAirshipLayout) ──
 
   // ── Core (Mast/Crystal) ──
   const core = new Graphics();
@@ -731,87 +528,7 @@ export function createWorld(app: Application) {
   }
   drawShipDetails();
 
-  // ── Cargo Hold Layer ──
-  const cargoWalls: typeof walls = [];
-  const cargoFloors: typeof floors = [];
-  const cargoDoors: typeof doors = [];
-
-  // Cargo dimensions - centered on shipCenterX (1600)
-  const cargoW = 600;
-  const cargoTotalH = 1000;
-  const cargoX = shipCenterX - cargoW / 2; // 1300
-  const cargoTopY = shipCenterY - cargoTotalH / 2; // 700
-
-  // Fore Storage room
-  const foreStorageH = 350;
-  cargoFloors.push({ x: cargoX, y: cargoTopY, w: cargoW, h: foreStorageH, color: 0x0e1418 });
-  // Walls: top, left, right
-  cargoWalls.push({ x: cargoX, y: cargoTopY, w: cargoW, h: wallThickness });
-  cargoWalls.push({ x: cargoX, y: cargoTopY, w: wallThickness, h: foreStorageH });
-  cargoWalls.push({ x: cargoX + cargoW - wallThickness, y: cargoTopY, w: wallThickness, h: foreStorageH });
-  // Door at bottom of fore storage
-  const cargoDoorW = 70;
-  const foreDoorX = shipCenterX - cargoDoorW / 2;
-  const foreDoorY = cargoTopY + foreStorageH - wallThickness;
-  cargoWalls.push({ x: cargoX, y: foreDoorY, w: foreDoorX - cargoX, h: wallThickness });
-  cargoWalls.push({ x: foreDoorX + cargoDoorW, y: foreDoorY, w: cargoX + cargoW - (foreDoorX + cargoDoorW), h: wallThickness });
-  cargoDoors.push({ id: "door-fore-storage", x: foreDoorX, y: foreDoorY, w: cargoDoorW, h: wallThickness, open: false });
-
-  // Central Corridor
-  const corridorH = 300;
-  const corridorY = cargoTopY + foreStorageH;
-  cargoFloors.push({ x: cargoX, y: corridorY, w: cargoW, h: corridorH, color: 0x0c1216 });
-  cargoWalls.push({ x: cargoX, y: corridorY, w: wallThickness, h: corridorH });
-  cargoWalls.push({ x: cargoX + cargoW - wallThickness, y: corridorY, w: wallThickness, h: corridorH });
-  // Door at bottom of corridor
-  const aftDoorX = shipCenterX - cargoDoorW / 2;
-  const aftDoorY = corridorY + corridorH - wallThickness;
-  cargoWalls.push({ x: cargoX, y: aftDoorY, w: aftDoorX - cargoX, h: wallThickness });
-  cargoWalls.push({ x: aftDoorX + cargoDoorW, y: aftDoorY, w: cargoX + cargoW - (aftDoorX + cargoDoorW), h: wallThickness });
-  cargoDoors.push({ id: "door-aft-storage", x: aftDoorX, y: aftDoorY, w: cargoDoorW, h: wallThickness, open: false });
-
-  // Aft Storage room
-  const aftStorageH = 350;
-  const aftStorageY = corridorY + corridorH;
-  cargoFloors.push({ x: cargoX, y: aftStorageY, w: cargoW, h: aftStorageH, color: 0x0e1418 });
-  cargoWalls.push({ x: cargoX, y: aftStorageY + aftStorageH - wallThickness, w: cargoW, h: wallThickness });
-  cargoWalls.push({ x: cargoX, y: aftStorageY, w: wallThickness, h: aftStorageH });
-  cargoWalls.push({ x: cargoX + cargoW - wallThickness, y: aftStorageY, w: wallThickness, h: aftStorageH });
-
-  const cargoSpawnPoint = { x: shipCenterX, y: cargoTopY + foreStorageH / 2 };
-
-  // ── Cargo Hull Polygon (barrel/pointed-oval shape) ──
-  const cargoHullPoints: { x: number; y: number }[] = [
-    // Bow (fore, slightly pointed)
-    { x: shipCenterX, y: cargoTopY - 30 },
-    // Port side going down
-    { x: cargoX - 20, y: cargoTopY + 80 },
-    { x: cargoX - 40, y: shipCenterY - 100 },
-    { x: cargoX - 40, y: shipCenterY + 100 },
-    { x: cargoX - 20, y: aftStorageY + aftStorageH - 80 },
-    // Stern (aft, slightly rounded)
-    { x: shipCenterX - 100, y: aftStorageY + aftStorageH + 30 },
-    { x: shipCenterX + 100, y: aftStorageY + aftStorageH + 30 },
-    // Starboard side going up
-    { x: cargoX + cargoW + 20, y: aftStorageY + aftStorageH - 80 },
-    { x: cargoX + cargoW + 40, y: shipCenterY + 100 },
-    { x: cargoX + cargoW + 40, y: shipCenterY - 100 },
-    { x: cargoX + cargoW + 20, y: cargoTopY + 80 },
-  ];
-
-  // Inset version for collision
-  const cargoHullCollisionInset = 20;
-  const cargoCenterX = shipCenterX;
-  const cargoCenterY = shipCenterY;
-  const cargoHullCollisionPoints: { x: number; y: number }[] = cargoHullPoints.map((p) => {
-    const dx = p.x - cargoCenterX;
-    const dy = p.y - cargoCenterY;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-    if (dist === 0) return { x: p.x, y: p.y + cargoHullCollisionInset };
-    const insetX = (dx / dist) * cargoHullCollisionInset;
-    const insetY = (dy / dist) * cargoHullCollisionInset;
-    return { x: p.x - insetX, y: p.y - insetY };
-  });
+  // ── Cargo Hold Layer (from buildAirshipLayout) ──
 
   // ── Cargo Visual Container ──
   const cargoGeomContainer = new Container();
@@ -897,7 +614,8 @@ export function createWorld(app: Application) {
     cargoDoorGfx.clear();
     for (const door of cargoDoors) {
       cargoDoorGfx.rect(door.x, door.y, door.w, door.h);
-      cargoDoorGfx.fill({ color: door.open ? 0x2d6a4f : 0x7d2c2c });
+      const jammed = doorLockouts.has(door.id);
+      cargoDoorGfx.fill({ color: jammed ? 0xb22222 : door.open ? 0x2d6a4f : 0x7d2c2c });
     }
   }
   drawCargoDoors();
@@ -917,9 +635,12 @@ export function createWorld(app: Application) {
   cargoFrameGfx.stroke({ color: 0x3a2510, width: 3 });
   cargoGeomContainer.addChild(cargoFrameGfx);
 
+  const deckHatches = HATCH_DEFINITIONS.map((h) => ({ id: h.id, x: h.posA.x, y: h.posA.y }));
+  const cargoHatches = HATCH_DEFINITIONS.map((h) => ({ id: h.id, x: h.posB.x, y: h.posB.y }));
+
   // ── Hatch Markers on Deck ──
   const deckHatchGfx = new Graphics();
-  for (const h of [{ x: 1600, y: 780 }, { x: 1600, y: 1580 }]) {
+  for (const h of deckHatches) {
     deckHatchGfx.rect(h.x - 20, h.y - 20, 40, 40);
     deckHatchGfx.fill({ color: 0x3a2a1a });
     deckHatchGfx.rect(h.x - 20, h.y - 20, 40, 40);
@@ -1040,10 +761,7 @@ export function createWorld(app: Application) {
 
   // ── Sky Visible Through Hatch Openings (on cargo layer) ──
   const cargoSkyHatchGfx = new Graphics();
-  for (const h of [
-    { x: shipCenterX, y: cargoTopY + foreStorageH / 2 },
-    { x: shipCenterX, y: aftStorageY + aftStorageH / 2 },
-  ]) {
+  for (const h of cargoHatches) {
     // Light blue rectangle visible through the hatch above
     cargoSkyHatchGfx.rect(h.x - 16, h.y - 16, 32, 32);
     cargoSkyHatchGfx.fill({ color: 0x0a1525, alpha: 0.6 });
@@ -1054,10 +772,7 @@ export function createWorld(app: Application) {
 
   // ── Hatch Markers on Cargo ──
   const cargoHatchGfx = new Graphics();
-  for (const h of [
-    { x: shipCenterX, y: cargoTopY + foreStorageH / 2 },
-    { x: shipCenterX, y: aftStorageY + aftStorageH / 2 },
-  ]) {
+  for (const h of cargoHatches) {
     cargoHatchGfx.rect(h.x - 20, h.y - 20, 40, 40);
     cargoHatchGfx.fill({ color: 0x3a2a1a });
     cargoHatchGfx.rect(h.x - 20, h.y - 20, 40, 40);
@@ -1073,9 +788,9 @@ export function createWorld(app: Application) {
 
   // Dim warm lantern glows at key positions
   const lanternPositions = [
-    { x: 1600, y: 875 },   // Fore storage center (near hatch)
+    { x: cargoHatches[0].x, y: cargoHatches[0].y }, // Fore storage center (near hatch)
     { x: 1600, y: 1200 },  // Corridor center
-    { x: 1600, y: 1525 },  // Aft storage center (near hatch)
+    { x: cargoHatches[1].x, y: cargoHatches[1].y }, // Aft storage center (near hatch)
     { x: 1400, y: 875 },   // Fore storage left
     { x: 1800, y: 875 },   // Fore storage right
     { x: 1400, y: 1525 },  // Aft storage left
@@ -1096,15 +811,7 @@ export function createWorld(app: Application) {
 
   cargoGeomContainer.addChild(cargoAmbientGfx);
 
-  // ── Hatch Position Arrays ──
-  const deckHatches = [
-    { id: "hatch-fore", x: 1600, y: 780 },
-    { id: "hatch-aft", x: 1600, y: 1580 },
-  ];
-  const cargoHatches = [
-    { id: "hatch-fore", x: shipCenterX, y: cargoTopY + foreStorageH / 2 },
-    { id: "hatch-aft", x: shipCenterX, y: aftStorageY + aftStorageH / 2 },
-  ];
+  
 
   // ── Layer Visibility ──
   function setLayerVisibility(layer: LayerId) {
@@ -1144,7 +851,7 @@ export function createWorld(app: Application) {
 
   const loadingTitle = new Text({
     text: "Aether Spire",
-    style: { fill: 0x7ee3c2, fontSize: 24, fontWeight: "bold", fontFamily: UI_FONT }
+    style: { fill: SP.ping, fontSize: 24, fontWeight: "bold", fontFamily: UI_FONT }
   });
   loadingTitle.anchor.set(0.5);
   loadingTitle.x = app.screen.width / 2;
@@ -1153,7 +860,7 @@ export function createWorld(app: Application) {
 
   const loadingText = new Text({
     text: "Loading assets...",
-    style: { fill: 0xe6e6e6, fontSize: 16, fontFamily: UI_FONT }
+    style: { fill: SP.text, fontSize: 16, fontFamily: UI_FONT }
   });
   loadingText.anchor.set(0.5);
   loadingText.x = app.screen.width / 2;
@@ -1189,7 +896,7 @@ export function createWorld(app: Application) {
   function updateLoadingProgress(percent: number, text: string) {
     loadingText.text = text;
     loadingProgressBarFill.clear();
-    loadingProgressBarFill.beginFill(0x7ee3c2);
+    loadingProgressBarFill.beginFill(SP.ping);
     loadingProgressBarFill.drawRoundedRect(0, 0, 300 * percent / 100, 6, 3);
     loadingProgressBarFill.endFill();
   }
@@ -1208,7 +915,7 @@ export function createWorld(app: Application) {
   }
   const activePings: ActivePing[] = [];
   const PING_DURATION_MS = 5000; // 5 seconds
-  const PING_COLOR = 0xffdd44; // Yellow/gold
+  const PING_COLOR = SP.gold;
 
   function addPing(ping: ActivePing) {
     // Remove any existing ping from the same player
@@ -1359,7 +1066,8 @@ export function createWorld(app: Application) {
     doorLayer.clear();
     doors.forEach((door) => {
       doorLayer.rect(door.x, door.y, door.w, door.h);
-      doorLayer.fill({ color: door.open ? 0x2d6a4f : 0x7d2c2c });
+      const jammed = doorLockouts.has(door.id);
+      doorLayer.fill({ color: jammed ? 0xb22222 : door.open ? 0x2d6a4f : 0x7d2c2c });
     });
   }
 
@@ -1419,7 +1127,7 @@ export function createWorld(app: Application) {
   // Stability damage flash overlay
   const stabilityFlash = new Graphics();
   stabilityFlash.rect(10, 18, stabilityBarWidth, stabilityBarHeight);
-  stabilityFlash.fill({ color: 0xff4444 });
+  stabilityFlash.fill({ color: SP.critical });
   stabilityFlash.alpha = 0;
   stabilityContainer.addChild(stabilityFlash);
 
@@ -1510,7 +1218,7 @@ export function createWorld(app: Application) {
     // Flash overlay for pickup effect
     const slotFlash = new Graphics();
     slotFlash.roundRect(0, 0, SLOT_SIZE, SLOT_SIZE, 3);
-    slotFlash.fill({ color: 0xffffff });
+    slotFlash.fill({ color: SP.textBright });
     slotFlash.alpha = 0;
     slotContainer.addChild(slotFlash);
 
@@ -1558,7 +1266,7 @@ export function createWorld(app: Application) {
   const tooltipBg = new Graphics();
   tooltipContainer.addChild(tooltipBg);
 
-  const tooltipTitle = new Text({ text: "", style: { fill: 0xe6e6e6, fontSize: 12, fontWeight: "bold", fontFamily: UI_FONT } });
+  const tooltipTitle = new Text({ text: "", style: { fill: SP.text, fontSize: 12, fontWeight: "bold", fontFamily: UI_FONT } });
   tooltipTitle.x = 8;
   tooltipTitle.y = 6;
   tooltipContainer.addChild(tooltipTitle);
@@ -1568,7 +1276,7 @@ export function createWorld(app: Application) {
   tooltipDesc.y = 22;
   tooltipContainer.addChild(tooltipDesc);
 
-  const tooltipStatus = new Text({ text: "", style: { fill: 0x888888, fontSize: 11, fontFamily: UI_FONT } });
+  const tooltipStatus = new Text({ text: "", style: { fill: SP.uiMuted, fontSize: 11, fontFamily: UI_FONT } });
   tooltipStatus.x = 8;
   tooltipStatus.y = 50;
   tooltipContainer.addChild(tooltipStatus);
@@ -1613,7 +1321,7 @@ export function createWorld(app: Application) {
   // Fallback circle (used until sprites load)
   const playerFallback = new Graphics();
   playerFallback.circle(0, 0, 10);
-  playerFallback.fill({ color: 0xe6e6e6 });
+  playerFallback.fill({ color: SP.text });
   playerFallback.stroke({ color: 0x2a3b47, width: 2 });
   playerContainer.addChild(playerFallback);
 
@@ -1676,7 +1384,7 @@ export function createWorld(app: Application) {
   let currentDirection: Direction = "down";
   let isWalking = false;
   let spritesLoaded = false;
-  let playerTintColor = 0xffffff; // Default white color
+  let playerTintColor = SP.textBright; // Default white color
 
   // Load character sprites
   async function loadCharacterSprites() {
@@ -1753,7 +1461,7 @@ export function createWorld(app: Application) {
     }
   }
 
-  const playerLabel = new Text({ text: "", style: { fill: 0xe6e6e6, fontSize: 13, fontWeight: "bold", fontFamily: UI_FONT } });
+  const playerLabel = new Text({ text: "", style: { fill: SP.text, fontSize: 13, fontWeight: "bold", fontFamily: UI_FONT } });
   playerLabel.anchor.set(0.5);
   worldLayer.addChild(playerLabel);
 
@@ -1766,7 +1474,7 @@ export function createWorld(app: Application) {
   channelBarFill.visible = false;
   worldLayer.addChild(channelBarFill);
 
-  const channelLabel = new Text({ text: "", style: { fill: 0xe6e6e6, fontSize: 11, fontFamily: UI_FONT } });
+  const channelLabel = new Text({ text: "", style: { fill: SP.text, fontSize: 11, fontFamily: UI_FONT } });
   channelLabel.anchor.set(0.5);
   channelLabel.visible = false;
   worldLayer.addChild(channelLabel);
@@ -1875,7 +1583,7 @@ export function createWorld(app: Application) {
     // Bright pip at fill edge
     if (width > 2) {
       stabilityFill.rect(10 + width - 2, 18, 2, stabilityBarHeight);
-      stabilityFill.fill({ color: 0xffffff, alpha: 0.4 });
+      stabilityFill.fill({ color: SP.textBright, alpha: 0.4 });
     }
 
     stabilityLabel.text = `${Math.round(clamped)}%`;
@@ -1905,7 +1613,7 @@ export function createWorld(app: Application) {
         slot.iconFallback.circle(SLOT_SIZE / 2, SLOT_SIZE / 2, 10);
         slot.iconFallback.fill({ color: instrumentColors[type], alpha: has ? 0.9 : 0.25 });
         if (has) {
-          slot.iconFallback.stroke({ color: 0xffffff, width: 1, alpha: 0.4 });
+          slot.iconFallback.stroke({ color: SP.textBright, width: 1, alpha: 0.4 });
         }
       }
     });
@@ -2173,8 +1881,8 @@ export function createWorld(app: Application) {
 
       // Drain rate indicator for active (unfixed) issues
       if (emitter.status === "active") {
-        const drain = calculateDrainRate(emitter.spawnTime, now);
-        const drainColor = drain >= 0.64 ? 0xff4444 : drain >= 0.32 ? 0xffaa44 : 0xff8866;
+        const drain = drainRateStrategy.getDrainRate(emitter.spawnTime, now);
+        const drainColor = drain >= 0.64 ? SP.warningBright : drain >= 0.32 ? SP.warningMid : SP.warningLow;
         const drainLabel = new Text({
           text: `-${drain.toFixed(1)}/s`,
           style: { fill: drainColor, fontSize: 10, fontFamily: UI_FONT },
@@ -2190,7 +1898,7 @@ export function createWorld(app: Application) {
       if (isFixing && fixerCount >= 2) {
         const helpText = new Text({
           text: `${fixerCount}x fixing`,
-          style: { fill: 0x7ee3c2, fontSize: 10, fontWeight: "bold", fontFamily: UI_FONT },
+          style: { fill: SP.ping, fontSize: 10, fontWeight: "bold", fontFamily: UI_FONT },
         });
         helpText.anchor.set(0.5);
         helpText.x = emitter.x;
@@ -2220,7 +1928,7 @@ export function createWorld(app: Application) {
         const g = new Graphics();
         g.circle(0, 0, 6);
         g.fill({ color, alpha: 0.9 });
-        g.stroke({ color: 0xffffff, width: 1, alpha: 0.6 });
+        g.stroke({ color: SP.textBright, width: 1, alpha: 0.6 });
         g.x = inst.x;
         g.y = inst.y;
         instrumentsLayer.addChild(g);
@@ -2228,7 +1936,7 @@ export function createWorld(app: Application) {
 
       const label = new Text({
         text: instrumentLabels[inst.type] || "?",
-        style: { fill: 0xe6e6e6, fontSize: 11, fontFamily: UI_FONT },
+        style: { fill: SP.text, fontSize: 11, fontFamily: UI_FONT },
       });
       label.anchor.set(0.5);
       label.x = inst.x;
@@ -2286,7 +1994,8 @@ export function createWorld(app: Application) {
     contextMenuBg.clear();
     drawBrassPanel(contextMenuBg, 0, 0, menuW, menuH);
 
-    contextMenuContainer.visible = true;
+    // On mobile, touch overlay context buttons handle this instead
+    contextMenuContainer.visible = !isMobile;
   }
 
   function hideContextMenu() {
@@ -2350,6 +2059,7 @@ export function createWorld(app: Application) {
     updateTeamInventory(state.teamInventory);
     setIssues(state.issues.filter(i => i.layer === currentLayer));
     setGroundInstruments(state.groundInstruments.filter(i => i.layer === currentLayer));
+    setLockouts(state.lockouts);
     updateMeta(state);
 
     // Warning ring based on stability
@@ -2451,13 +2161,13 @@ export function createWorld(app: Application) {
           sprite.stroke({ color: 0x1a222a, width: 2 });
         }
         
-        const label = new Text({ text: entry.name, style: { fill: 0xd0d7de, fontSize: 11, fontWeight: "bold", fontFamily: UI_FONT } });
+        const label = new Text({ text: entry.name, style: { fill: SP.textSoft, fontSize: 11, fontWeight: "bold", fontFamily: UI_FONT } });
         label.anchor.set(0.5);
         
         // Create progress bar for fixing
         const progressBarBg = new Graphics();
         const progressBarFill = new Graphics();
-        const progressLabel = new Text({ text: "", style: { fill: 0xffffff, fontSize: 10, fontFamily: UI_FONT } });
+        const progressLabel = new Text({ text: "", style: { fill: SP.textBright, fontSize: 10, fontFamily: UI_FONT } });
         progressLabel.anchor.set(0.5);
         
         playersLayer.addChild(sprite);
@@ -2669,6 +2379,22 @@ export function createWorld(app: Application) {
     drawCargoDoors();
   }
 
+  function setLockouts(lockouts: Lockout[]) {
+    doorLockouts = new Set(lockouts.filter((l) => l.kind === "door").map((l) => l.id));
+    hatchLockouts = new Set(lockouts.filter((l) => l.kind === "hatch").map((l) => l.id));
+    drawDoors();
+    drawCargoDoors();
+    drawMinimapStatic();
+  }
+
+  function isDoorJammed(doorId: string) {
+    return doorLockouts.has(doorId);
+  }
+
+  function isHatchJammed(hatchId: string) {
+    return hatchLockouts.has(hatchId);
+  }
+
   function getSpawnPoint(layer?: LayerId) {
     return (layer || currentLayer) === "cargo"
       ? { x: cargoSpawnPoint.x, y: cargoSpawnPoint.y }
@@ -2710,6 +2436,12 @@ export function createWorld(app: Application) {
   }
 
   function setInteractionText(text: string) {
+    if (isMobile) {
+      // Touch buttons have their own labels; hide the keyboard hint text
+      interactionText.text = "";
+      interactionBgGfx.clear();
+      return;
+    }
     interactionText.text = text;
     interactionBgGfx.clear();
     if (text) {
@@ -2839,14 +2571,15 @@ export function createWorld(app: Application) {
     for (const h of hatchPositions) {
       const hx = h.x * mmScale;
       const hy = h.y * mmScale;
+      const jammed = hatchLockouts.has(h.id);
       // Small diamond shape for hatch
       mmFloors.moveTo(hx, hy - 3);
       mmFloors.lineTo(hx + 2.5, hy);
       mmFloors.lineTo(hx, hy + 3);
       mmFloors.lineTo(hx - 2.5, hy);
       mmFloors.closePath();
-      mmFloors.fill({ color: SP.amber, alpha: 0.9 });
-      mmFloors.stroke({ color: SP.brass, width: 0.5, alpha: 0.6 });
+      mmFloors.fill({ color: jammed ? 0xb22222 : SP.amber, alpha: 0.9 });
+      mmFloors.stroke({ color: jammed ? 0xff6b6b : SP.brass, width: 0.5, alpha: 0.6 });
     }
   }
   drawMinimapStatic();
@@ -2890,7 +2623,7 @@ export function createWorld(app: Application) {
       const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 120);
       layerCardGfx.roundRect(0, cardY, MINIMAP_W, 18, 3);
       layerCardGfx.fill({ color: 0x661111, alpha: 0.6 + 0.3 * pulse });
-      layerCardGfx.stroke({ color: 0xff4444, width: 1.5, alpha: 0.7 + 0.3 * pulse });
+      layerCardGfx.stroke({ color: SP.critical, width: 1.5, alpha: 0.7 + 0.3 * pulse });
     } else {
       layerCardGfx.roundRect(0, cardY, MINIMAP_W, 18, 3);
       layerCardGfx.fill({ color: SP.darkBg, alpha: 0.85 });
@@ -2905,7 +2638,7 @@ export function createWorld(app: Application) {
 
     if (otherLayerIssueCount > 0) {
       layerCardGfx.circle(MINIMAP_W - 10, cardY + 9, 4);
-      layerCardGfx.fill({ color: 0xff4444 });
+      layerCardGfx.fill({ color: SP.critical });
     }
   }
 
@@ -2961,7 +2694,7 @@ export function createWorld(app: Application) {
       muteStrike.clear();
       muteStrike.moveTo(6, AUDIO_PANEL_H / 2);
       muteStrike.lineTo(20, AUDIO_PANEL_H / 2);
-      muteStrike.stroke({ color: 0xff4444, width: 2 });
+      muteStrike.stroke({ color: SP.critical, width: 2 });
     }
   }
 
@@ -3111,10 +2844,19 @@ export function createWorld(app: Application) {
   function positionMinimap() {
     const screenW = app.renderer.screen.width;
     const screenH = app.renderer.screen.height;
-    minimapContainer.x = screenW - MINIMAP_W - MINIMAP_PAD;
-    minimapContainer.y = screenH - MINIMAP_H - MINIMAP_PAD - AUDIO_PANEL_H - AUDIO_GAP - LAYER_CARD_H;
-    audioContainer.x = minimapContainer.x;
-    audioContainer.y = minimapContainer.y + MINIMAP_H + LAYER_CARD_H + AUDIO_GAP;
+    if (isMobile) {
+      // Mobile: top-right, below inventory panel
+      const INVENTORY_BOTTOM = INVENTORY_PAD + 24 + SLOT_SIZE + 10 + 6;
+      minimapContainer.x = screenW - MINIMAP_W - MINIMAP_PAD;
+      minimapContainer.y = INVENTORY_BOTTOM;
+      audioContainer.visible = false;
+    } else {
+      minimapContainer.x = screenW - MINIMAP_W - MINIMAP_PAD;
+      minimapContainer.y = screenH - MINIMAP_H - MINIMAP_PAD - AUDIO_PANEL_H - AUDIO_GAP - LAYER_CARD_H;
+      audioContainer.visible = true;
+      audioContainer.x = minimapContainer.x;
+      audioContainer.y = minimapContainer.y + MINIMAP_H + LAYER_CARD_H + AUDIO_GAP;
+    }
   }
   positionMinimap();
 
@@ -3242,8 +2984,14 @@ export function createWorld(app: Application) {
       contentH += entry.text.height + 2;
     }
     const logH = Math.max(28, contentH + 6);
-    logContainer.x = screenW - LOG_W - MINIMAP_PAD;
-    logContainer.y = screenH - MINIMAP_H - MINIMAP_PAD - AUDIO_PANEL_H - AUDIO_GAP - LAYER_CARD_H - 14 - logH;
+    if (isMobile) {
+      // Mobile: left side, below stability bar
+      logContainer.x = 16;
+      logContainer.y = 120;
+    } else {
+      logContainer.x = screenW - LOG_W - MINIMAP_PAD;
+      logContainer.y = screenH - MINIMAP_H - MINIMAP_PAD - AUDIO_PANEL_H - AUDIO_GAP - LAYER_CARD_H - 14 - logH;
+    }
   }
   positionLog();
 
@@ -3379,6 +3127,9 @@ export function createWorld(app: Application) {
     getWalls,
     getDoors,
     setDoorsState,
+    setLockouts,
+    isDoorJammed,
+    isHatchJammed,
     getSpawnPoint,
     setCamera,
     setZoom,

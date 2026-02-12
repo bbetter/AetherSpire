@@ -249,6 +249,13 @@ export function handleClientMessage(
     }
 
     if (message.type === "door") {
+      if (activeMatch) {
+        const now = Date.now();
+        const jammed = activeMatch.state.lockouts.some(
+          (l) => l.kind === "door" && l.id === message.doorId && l.endsAt > now
+        );
+        if (jammed) return;
+      }
       doors.set(message.doorId, message.open);
       broadcastDoors(roomClients as any, doors);
       return;
@@ -258,6 +265,13 @@ export function handleClientMessage(
       if (!message.playerId) return;
       if (!activeMatch) return;
       if (activeMatch.state.gameOver) return;
+      {
+        const now = Date.now();
+        const jammed = activeMatch.state.lockouts.some(
+          (l) => l.kind === "hatch" && l.id === message.hatchId && l.endsAt > now
+        );
+        if (jammed) return;
+      }
 
       const playerEntry = players.get(message.playerId);
       if (!playerEntry) return;
